@@ -293,8 +293,13 @@ def download_jobbench(*, dry_run=False):
     if (dest / ".harness2-download.json").is_file():
         return
 
-    code = """from huggingface_hub import HfApi, snapshot_download
+    code = """import os
+from huggingface_hub import HfApi, snapshot_download
 import json, sys
+# A stalled CDN connection otherwise hangs the whole setup forever: these bound the socket
+# and let huggingface_hub retry instead of waiting on a dead peer.
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
+os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
 revision = HfApi().dataset_info("JobBench/job-bench").sha
 snapshot_download("JobBench/job-bench", repo_type="dataset", revision=revision,
                   allow_patterns=["dataset/**"], local_dir=sys.argv[1])

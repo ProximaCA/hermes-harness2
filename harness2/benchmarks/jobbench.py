@@ -40,6 +40,7 @@ from ..core.spec import BenchPrompts, BenchSpec, resolve_channel_model
 from ..install import codex_config_error
 from ..substrate.base import Install, RunRequest
 from ..substrate.codex import CodexSubstrate
+from ..substrate.hermes import HermesSubstrate, compose_agents_md
 from ..substrate.opencode import OUTPUT_TOKEN_MAX, OpencodeSubstrate
 from .tasks import discover, select
 
@@ -47,9 +48,11 @@ _RUNNER_DIR = config.THIRD_PARTY / "jb_runner"
 _STORE_SEED_LOCK = threading.Lock()
 
 OC_RUNNER = Path(__file__).resolve().parent / "jb_opencode_runner.py"
+HM_RUNNER = Path(__file__).resolve().parent / "jb_hermes_runner.py"
 CX_RUNNER = _RUNNER_DIR / "run_benchmark_codex_cli_adapt.sh"
 OC_BASE_HARNESS = _RUNNER_DIR / "harness_baseline_oc"
 CX_BASE_HARNESS = _RUNNER_DIR / "codex_base_harness"
+HM_BASE_HARNESS = _RUNNER_DIR / "harness_baseline_hm"
 
 
 def run_detached(cmd: list[str], *, timeout: int, **kw) -> None:
@@ -494,26 +497,52 @@ def render_opencode_tree(staged: Path, render_dir: Path, ctx: dict) -> None:
             shutil.copy(p, rd / ".opencode" / "plugin" / p.name)
 
 
-_INSTALL_MODE = {"oc": "workspace_agents_md", "cx": "codex_root"}
+def render_hermes_tree(staged: Path, render_dir: Path, ctx: dict) -> None:
+    """Materialise the staged tree into what a Hermes session reads: AGENTS.md and ./scripts.
 
-_DEFAULT_TIMEOUT = {"oc": 2400, "cx": 3600}
+    Hermes injects AGENTS.md from the working directory as project context, so the four
+    always-on components land in that one file; helper scripts ride along next to it.
+    """
+    staged, rd = Path(staged), Path(render_dir)
+    if rd.exists():
+        shutil.rmtree(rd)
+    rd.mkdir(parents=True)
+    (rd / "AGENTS.md").write_text(compose_agents_md(staged, ctx), encoding="utf-8")
+    for s in _list_scripts(staged):
+        (rd / "scripts").mkdir(exist_ok=True)
+        shutil.copy(s, rd / "scripts" / s.name)
 
 
-def _channels() -> dict:
-    """Improver channel, resolved through core.spec.resolve_channel_model."""
-    ch = resolve_channel_model(None, None, effort="high")
+_INSTALL_MODE = {"oc": "workspace_agents_md", "cx": "codex_root", "hm": "workspace_agents_md"}
+
+_DEFAULT_TIMEOUT = {"oc": 2400, "cx": 3600, "hm": 2400}
+
+
+def _channels(substrate: str) -> dict:
+    """Improver channel, resolved through core.spec.resolve_channel_model.
+
+    The hermes cell edits its harness with the same CLI it solves with, so it needs no OpenCode
+    checkout on the proposer side either.
+    """
+    ch = (
+        resolve_channel_model("hermes", config.HERMES_MODEL, effort="high")
+        if substrate == "hm"
+        else resolve_channel_model(None, None, effort="high")
+    )
     return {"proposer": ch, "selector": ch}
 
 
 def make_spec(substrate: str) -> BenchSpec:
     if substrate not in _INSTALL_MODE:
-        raise ValueError(f"JobBench substrate must be 'oc' or 'cx', got {substrate!r}")
+        raise ValueError(
+            f"JobBench substrate must be one of {tuple(_INSTALL_MODE)}, got {substrate!r}"
+        )
     return BenchSpec(
         name="jb",
         runs_root=config.RUNS / "jb",
         install_mode=_INSTALL_MODE[substrate],
         prompts=jobbench_prompts(),
-        channels=_channels(),
+        channels=_channels(substrate),
         domain_word="profession",
         leak_globs=("RUBRICS.json", "eval_result/**", "expected/**", "reference/**"),
         allow_subagents=(substrate == "oc"),
@@ -632,12 +661,16 @@ class JobBenchAdapter:
     ):
         self.split_file = split_file
         self.spec = make_spec(substrate)
-        launcher = self._launch_opencode if substrate == "oc" else self._launch_codex
-        self.substrate = (
-            OpencodeSubstrate(launcher=launcher)
-            if substrate == "oc"
-            else CodexSubstrate(launcher=launcher)
-        )
+        launcher = {
+            "oc": self._launch_opencode,
+            "cx": self._launch_codex,
+            "hm": self._launch_hermes,
+        }[substrate]
+        self.substrate = {
+            "oc": OpencodeSubstrate,
+            "cx": CodexSubstrate,
+            "hm": HermesSubstrate,
+        }[substrate](launcher=launcher)
         self.timeout = int(timeout or _DEFAULT_TIMEOUT[substrate])
         self.store = Path(store_root) if store_root else config.RUNS / "jb" / "dataset"
 
@@ -829,6 +862,32 @@ class JobBenchAdapter:
         self._run_runner(CX_RUNNER, env, wall=t + 600, label=label)
         return [self._require_artifacts(task_id, label)]
 
+    def _launch_hermes(self, req: RunRequest, install: Install) -> list[Path]:
+        task_id, label, t = self._launch_common(req)
+        self.substrate.preflight()
+        render_dir = Path(tempfile.mkdtemp(prefix=f"hrender_hm_{label}_"))
+        try:
+            render_hermes_tree(
+                install.staging_dir, render_dir, _render_ctx(self.domain_of(task_id))
+            )
+            env = {
+                **os.environ,
+                "TASK_IDS": task_id,
+                "LABEL": label,
+                "HARNESS_RENDER_DIR": str(render_dir),
+                "TASKS_BASE_DIR": str(self.store),
+                "HERMES_BIN": config.HERMES_BIN,
+                "HERMES_MODEL": config.HERMES_MODEL,
+                "HERMES_MAX_TURNS": str(config.HERMES_MAX_TURNS),
+                "HERMES_TOOLSETS": config.HERMES_TOOLSETS,
+                "TIMEOUT_PER_TASK": str(t),
+                "MAX_RETRIES": "2",
+            }
+            self._run_runner(HM_RUNNER, env, wall=2 * t + 600, label=label)
+        finally:
+            shutil.rmtree(render_dir, ignore_errors=True)
+        return [self._require_artifacts(task_id, label)]
+
     def _run_runner(self, runner: Path, env: dict, *, wall: int, label: str) -> None:
         """Run the packaged launcher; timeouts leave the rollout incomplete."""
         if not runner.is_file():
@@ -948,7 +1007,11 @@ class JobBenchAdapter:
         return str(self._extract(d)["flat"]) if d.is_dir() else ""
 
     def base_harness(self) -> Path:
-        base = OC_BASE_HARNESS if self.substrate.name == "oc" else CX_BASE_HARNESS
+        base = {
+            "oc": OC_BASE_HARNESS,
+            "cx": CX_BASE_HARNESS,
+            "hm": HM_BASE_HARNESS,
+        }[self.substrate.name]
         if not HT.is_tree(self.substrate.surface(), base):
             raise FileNotFoundError(
                 f"JobBench base harness missing or not a {self.substrate.surface().name} "
@@ -1170,6 +1233,8 @@ __all__ = [
     "render_opencode_tree",
     "OC_RUNNER",
     "CX_RUNNER",
+    "HM_RUNNER",
     "OC_BASE_HARNESS",
     "CX_BASE_HARNESS",
+    "HM_BASE_HARNESS",
 ]

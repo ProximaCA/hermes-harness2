@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -101,6 +102,16 @@ SOLVER_MODEL_CX = env("HARNESS2_CODEX_MODEL", SOLVER_MODEL_OC.split("/", 1)[-1])
 IMPROVER_MODEL = env("HARNESS2_IMPROVER_MODEL", SOLVER_MODEL_OC)
 JUDGE_MODEL = env("HARNESS2_JUDGE_MODEL", "")
 
+# The hermes substrate and channel run the Hermes Agent CLI, which resolves its own model from
+# its profile: the sentinel below means "whatever that profile is configured with".
+HERMES_BIN = env("HARNESS2_HERMES_BIN", "") or shutil.which("hermes") or "hermes"
+HERMES_DEFAULT_MODEL = "hermes/default"
+HERMES_MODEL = env("HARNESS2_HERMES_MODEL", HERMES_DEFAULT_MODEL)
+HERMES_MAX_TURNS = env_int("HARNESS2_HERMES_MAX_TURNS", 200)
+HERMES_TOOLSETS = env(
+    "HARNESS2_HERMES_TOOLSETS", "terminal,file,search,web,todo,code_execution"
+)
+
 DEPENDENCY_PINS = {
     "job-bench-eval": "fa03a17f9ff662f136798a274e10011c3aa00fd0",
     "workbuddy-bench": "b516950be5b56eb3be406c2f76ee1c5111dcb57f",
@@ -172,16 +183,28 @@ WB_MAX_TRIALS = {"oc": 2, "cx": 2}
 WB_MODEL_CONNECTION = "local_proxy"
 
 DEFAULT_PROPOSER_CHANNEL = "opencode"
-PROPOSER_MODEL_BY_CHANNEL = {"opencode": IMPROVER_MODEL, "claude_cli": IMPROVER_MODEL}
+PROPOSER_MODEL_BY_CHANNEL = {
+    "opencode": IMPROVER_MODEL,
+    "claude_cli": IMPROVER_MODEL,
+    "hermes": HERMES_MODEL,
+}
 PHASE_WIDTH = 2
 TRANSPORT_ATTEMPTS = 2
 PROPOSER_CONCURRENCY = 2
 
 
-def validate_models(*, judge: bool = False) -> None:
-    require("HARNESS2_SOLVER_MODEL", needed_by="executor rollouts")
-    if "/" not in SOLVER_MODEL_OC or "/" not in IMPROVER_MODEL:
-        raise ConfigError("Executor and improver models must use OpenCode's provider/model syntax")
+def validate_models(*, judge: bool = False, substrate: str = "oc") -> None:
+    """Presence checks for the models this cell will call.
+
+    The hermes substrate runs the Hermes CLI, which brings its own configured model, so the
+    OpenCode provider/model pair is not required for it.
+    """
+    if substrate != "hm":
+        require("HARNESS2_SOLVER_MODEL", needed_by="executor rollouts")
+        if "/" not in SOLVER_MODEL_OC or "/" not in IMPROVER_MODEL:
+            raise ConfigError(
+                "Executor and improver models must use OpenCode's provider/model syntax"
+            )
     if any(m.startswith("google-vertex") for m in (SOLVER_MODEL_OC, IMPROVER_MODEL)):
         if not VERTEX_PROJECT:
             raise ConfigError("Set GOOGLE_CLOUD_PROJECT for Vertex AI")

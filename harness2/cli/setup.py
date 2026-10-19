@@ -32,7 +32,7 @@ def main(argv=None):
         default=None,
         help="wb only: one subset to install; omitted installs office, web, and code",
     )
-    p.add_argument("--substrate", choices=("oc", "cx"), default="oc")
+    p.add_argument("--substrate", choices=("oc", "cx", "hm"), default="oc")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
     if args.subset and args.benchmark != "wb":
@@ -46,21 +46,29 @@ def main(argv=None):
     name = {"jb": "job-bench-eval", "lab": "harvey-labs", "wb": "workbuddy-bench"}[args.benchmark]
     try:
         if not dry:
-            for binary in ("git", "uv", "npm") + (
+            # npm only installs bun, which only the OpenCode executor uses.
+            needed = ["git", "uv"] + ([] if args.substrate == "hm" else ["npm"])
+            for binary in tuple(needed) + (
                 ("docker", "curl") if args.benchmark == "wb" else ()
             ):
                 if not shutil.which(binary):
                     raise RuntimeError(f"Missing {binary}; see README.md")
-        install.clone("opencode", dry_run=dry)
-        install.patch("opencode", dry_run=dry)
-        install.run(
-            ["npm", "install", "--prefix", config.DEPENDENCIES / "tools", "bun@1.3.11"], dry_run=dry
-        )
-        install.run(
-            [config.BUN, "install", "--frozen-lockfile", "--ignore-scripts"],
-            cwd=config.OPENCODE_DIR,
-            dry_run=dry,
-        )
+        if args.substrate == "hm":
+            # The Hermes substrate runs the hermes CLI as both executor and improver, so the
+            # OpenCode checkout, patches and bun/node_modules are dead weight for this cell.
+            print("hermes substrate: skipping the OpenCode checkout and bun install")
+        else:
+            install.clone("opencode", dry_run=dry)
+            install.patch("opencode", dry_run=dry)
+            install.run(
+                ["npm", "install", "--prefix", config.DEPENDENCIES / "tools", "bun@1.3.11"],
+                dry_run=dry,
+            )
+            install.run(
+                [config.BUN, "install", "--frozen-lockfile", "--ignore-scripts"],
+                cwd=config.OPENCODE_DIR,
+                dry_run=dry,
+            )
         install.clone(name, dry_run=dry)
         install.patch(name, dry_run=dry)
         install.overlays(name, dry_run=dry)

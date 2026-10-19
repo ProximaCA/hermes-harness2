@@ -23,5 +23,10 @@ with upstream. It has been replaced by the first-party Python module
 which the adapter launches as a subprocess in its place. That module is release
 code, not a vendored asset, so it is not listed in `ASSETS.json`.
 
+`harness_baseline_hm/` is likewise first-party, not vendored: it mirrors the shape of
+`harness_baseline_oc/` (four always-on components plus a scripts placeholder) so the two
+baselines start from the same empty harness, but it is composed into a single `AGENTS.md`
+because that is the context file Hermes reads. It is not listed in `ASSETS.json`.
+
 [ASSETS.json](../../../dependencies/ASSETS.json) records the shipped file checksums.
 Verify them with `python scripts/check_provenance.py`.

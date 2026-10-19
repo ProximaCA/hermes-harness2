@@ -1,0 +1,8 @@
+__pycache__/
+*.egg-info/
+.venv/
+runs/
+.env
+
+# Fetched by harness2-setup; the tracked files beside them (ASSETS.json, PINNED.md) stay.
+dependencies/*/

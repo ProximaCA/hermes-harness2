@@ -22,7 +22,6 @@ import subprocess
 
 from . import config
 from .install import PATCHES, missing_runners
-from .substrate.opencode import OpencodeSubstrate
 
 
 def check(adapter, *, judge=False) -> list[str]:
@@ -44,9 +43,9 @@ def check(adapter, *, judge=False) -> list[str]:
             return False
 
     for validate in (
-        lambda: config.validate_models(judge=judge),
+        lambda: config.validate_models(judge=judge, substrate=adapter.substrate.name),
         adapter.tasks,
-        OpencodeSubstrate().preflight,
+        adapter.substrate.preflight,
         adapter.preflight,
     ):
         try:
@@ -57,7 +56,10 @@ def check(adapter, *, judge=False) -> list[str]:
     bench = adapter.spec.name.split("-", 1)[0]
     name = {"jb": "job-bench-eval", "lab": "harvey-labs", "wb": "workbuddy-bench"}[bench]
     repo = config.DEPENDENCIES / name
-    for dependency in (name, "opencode"):
+    # The hermes substrate never touches the OpenCode checkout, so neither its pin nor its
+    # patch nor its node_modules is a readiness condition for that cell.
+    dependencies = (name,) if adapter.substrate.name == "hm" else (name, "opencode")
+    for dependency in dependencies:
         target = config.DEPENDENCIES / dependency
         if (target / ".git").exists():
             try:
@@ -73,7 +75,7 @@ def check(adapter, *, judge=False) -> list[str]:
             f"{dependency} patch",
             ["git", "-C", target, "apply", "--reverse", "--check", patch],
         )
-    if not (config.OPENCODE_DIR / "node_modules").is_dir():
+    if adapter.substrate.name != "hm" and not (config.OPENCODE_DIR / "node_modules").is_dir():
         errors.append(f"OpenCode dependencies missing; run harness2-setup {bench}")
 
     if any(

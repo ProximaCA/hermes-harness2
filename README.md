@@ -137,6 +137,41 @@ Choose one benchmark per command. WorkBuddy also takes `--subset office`,
 [benchmark guides](docs/BENCHMARKS.md) cover each one's data, domains, and
 grading.
 
+## Hermes substrate
+
+`--substrate hm` runs every rollout through the
+[Hermes Agent](https://hermes-agent.nousresearch.com) CLI instead of OpenCode or
+Codex, and uses that same CLI as the improver channel, so a Hermes cell needs
+neither a Node toolchain nor an OpenCode checkout:
+
+```bash
+harness2-setup jb --substrate hm
+harness2-check --bench jb --substrate hm
+harness2 --bench jb --substrate hm --k 1 --mode parallel --max-tasks 1
+```
+
+`hm` is wired for JobBench (`--bench jb`) only.
+
+**What the proposer can edit.** The four always-on components
+(`systemprompt.md`, `guardrails.md`, `LongTermMEMORY.md`,
+`tool_descriptions/tool_guidance.md`) are composed into a single `AGENTS.md` in
+the task workspace, which Hermes injects as project context; `scripts/` is
+copied beside it and indexed in that same file.
+
+**What it refuses.** Hermes resolves skills from `HERMES_HOME/skills` and
+trusted project directories, loads plugins from `HERMES_HOME/plugins`, and
+delegates through its own tool rather than per-workspace agent files. So
+`skills/`, `sub_agents/` and `plugin/` are rejected at materialise time with a
+message naming the component, instead of being staged and silently ignored.
+
+**Environment.** `HARNESS2_HERMES_BIN` (default: `hermes` on `PATH`),
+`HARNESS2_HERMES_MODEL` (default `hermes/default` — whatever the CLI profile is
+configured with), `HARNESS2_HERMES_MAX_TURNS` (default 200), and
+`HARNESS2_HERMES_TOOLSETS` (default
+`terminal,file,search,web,todo,code_execution`). Rollouts share the host
+profile, so the run's own harness is `AGENTS.md`; anything the host profile
+injects globally is present as well.
+
 ## Experiments
 
 Scale task-level recursion in two ways: **parallel recursion** explores multiple
@@ -157,6 +192,7 @@ through successive Propose–Probe–Compose steps.
 | `--k K --mode parallel` | Probe `K` general and `K` domain-specific candidates, then produce `K` compositions |
 | `--k K --mode sequential` | Refine the harness through `K` successive steps |
 | `--substrate cx` | Use Codex instead of the default OpenCode executor |
+| `--substrate hm` | Use the Hermes Agent CLI (JobBench only); see [Hermes substrate](#hermes-substrate) |
 
 After each task, harnessing-level recursion retains the adopted harness and
 evidence-supported lessons to guide future refinement. See the

@@ -113,6 +113,8 @@ class Proposer:
                     "ANTHROPIC_MODEL": self.spec.model,
                 }
             )
+        elif self.spec.kind == "hermes":
+            pass  # the CLI resolves model and credentials from its own profile
         else:
             e.update(
                 {
@@ -159,9 +161,11 @@ class Proposer:
                 if context_dir and Path(context_dir).is_dir():
                     shutil.copytree(context_dir, tmp / "context", dirs_exist_ok=True)
                 with _SEM if _SEM is not None else contextlib.nullcontext():
-                    text, cost, err = (
-                        self._claude_cli if self.spec.kind == "claude_cli" else self._opencode
-                    )(tmp, mission, system, wall)
+                    runner = {
+                        "claude_cli": self._claude_cli,
+                        "hermes": self._hermes,
+                    }.get(self.spec.kind, self._opencode)
+                    text, cost, err = runner(tmp, mission, system, wall)
                 spent_usd += cost
                 if not text.strip():
                     last = err or "empty reply"
@@ -310,6 +314,56 @@ class Proposer:
         tail = _strip_oc_banner(p.stderr or "").strip()[-300:]
         return "", cost, f"rc={p.returncode}: {err or tail or 'empty reply'}"
 
+    def _hermes(self, cwd: Path, mission: str, system: str, wall: int) -> tuple[str, float, str]:
+        """One `hermes chat --format stream-json` session; the answer comes from output/answer.md
+        when the session wrote it, else from the terminal `result` event."""
+        (cwd / "MISSION.md").write_text(
+            (f"{system}\n\n---\n\n" if system else "") + mission, encoding="utf-8"
+        )
+        out = cwd / "output"
+        out.mkdir(exist_ok=True)
+        prompt_file = cwd / ".prompt.txt"
+        prompt_file.write_text(
+            "Read MISSION.md first. Do what it asks. Reply with the requested output as "
+            "your final message AND save it verbatim to output/answer.md.",
+            encoding="utf-8",
+        )
+        cmd = [
+            config.HERMES_BIN,
+            "chat",
+            "--query-file",
+            str(prompt_file),
+            "--format",
+            "stream-json",
+            "--oneshot",
+            "--yolo",
+            "--in",
+            str(cwd),
+            "--max-turns",
+            str(int(self.spec.steps)),
+        ]
+        if self.spec.model and self.spec.model != config.HERMES_DEFAULT_MODEL:
+            cmd += ["-m", self.spec.model]
+        if config.HERMES_TOOLSETS:
+            cmd += ["-t", config.HERMES_TOOLSETS]
+        p = subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=self.env(),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=wall,
+        )
+        ans = out / "answer.md"
+        if ans.is_file() and ans.read_text(errors="replace").strip():
+            return ans.read_text(errors="replace"), 0.0, ""
+        text, err = _stream_json_reply(p.stdout)
+        if text.strip():
+            return text, 0.0, ""
+        tail = (p.stderr or "").strip()[-300:]
+        return "", 0.0, f"rc={p.returncode}: {err or tail or 'empty reply'}"
+
     def _harvest(self, tmp: Path, sub: str, label: str, cache_key: str = "") -> Path | None:
         """Copy `tmp/<sub>` somewhere durable before the session directory is removed."""
         src = tmp / sub
@@ -441,6 +495,33 @@ _OC_BANNER = re.compile(
 def _strip_oc_banner(s: str) -> str:
     """Drop the migration banner lines from OpenCode output. No-op when they are absent."""
     return _OC_BANNER.sub("", s or "")
+
+
+def _stream_json_reply(stdout: str) -> tuple[str, str]:
+    """(answer, error) from a `hermes chat --format stream-json` stdout.
+
+    The terminal `result` event carries the final answer; the `text` deltas are the fallback
+    for a run that ended without one.
+    """
+    deltas: list[str] = []
+    answer = ""
+    err = ""
+    for ln in (stdout or "").splitlines():
+        ln = ln.strip()
+        if not ln.startswith("{"):
+            continue
+        try:
+            ev = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        if ev.get("type") == "text" and isinstance(ev.get("text"), str):
+            deltas.append(ev["text"])
+        elif ev.get("type") == "result":
+            answer = str(ev.get("text") or "")
+            err = str(ev.get("error") or "")
+    return (answer or "".join(deltas)), err
 
 
 def _opencode_stdout(stdout: str) -> tuple[str, str]:

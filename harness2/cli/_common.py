@@ -29,7 +29,7 @@ from ..core.spec import BenchmarkAdapter
 
 BENCHES = ("jb", "wb", "lab")
 WB_SUBSETS = ("office", "web", "code")
-SUBSTRATES = ("oc", "cx")
+SUBSTRATES = ("oc", "cx", "hm")
 
 MODES_DEFAULT = "parallel"
 MODES_HELP = (
@@ -50,6 +50,10 @@ def make_adapter(
         raise ValueError(f"unknown bench {bench!r}; expected one of {BENCHES}")
     if substrate not in SUBSTRATES:
         raise ValueError(f"unknown substrate {substrate!r}; expected one of {SUBSTRATES}")
+    if substrate == "hm" and bench != "jb":
+        raise ValueError(
+            f"substrate 'hm' (Hermes) is wired for --bench jb only; got --bench {bench!r}"
+        )
     if bench == "wb":
         if subset not in WB_SUBSETS:
             raise ValueError(f"--bench wb needs --subset from {WB_SUBSETS}, got {subset!r} ")
@@ -104,7 +108,7 @@ def add_cell_args(p: argparse._ActionsContainer) -> None:
         "--substrate",
         default="oc",
         choices=SUBSTRATES,
-        help="task-executor substrate: oc (opencode) | cx (codex)",
+        help="task-executor substrate: oc (opencode) | cx (codex) | hm (Hermes)",
     )
 
 

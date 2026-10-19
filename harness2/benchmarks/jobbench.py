@@ -1231,6 +1231,7 @@ __all__ = [
     "jobbench_prompts",
     "compose_agent_body",
     "render_opencode_tree",
+    "render_hermes_tree",
     "OC_RUNNER",
     "CX_RUNNER",
     "HM_RUNNER",

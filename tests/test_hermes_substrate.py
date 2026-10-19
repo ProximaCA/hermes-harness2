@@ -217,6 +217,57 @@ class PromptSurfaceTests(unittest.TestCase):
         self.assertNotIn("plugin/<name>.ts", st.surface_md)
 
 
+class TruncationTests(unittest.TestCase):
+    """A rollout cut by the wall clock must never be adopted as adaptation evidence.
+
+    Runs a fake `hermes` that writes a deliverable and then exits 124 (the timeout code),
+    which is exactly what a real rollout does when the machine's cap kills it mid-run.
+    """
+
+    def test_timed_out_attempt_is_discarded_even_with_partial_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            fake = tmp / "fake_hermes"
+            fake.write_text(
+                "#!/bin/sh\nmkdir -p output && echo partial > output/partial.txt\nexit 124\n",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            store = tmp / "store"
+            task_dir = store / "demo" / "task1" / "task_folder"
+            task_dir.mkdir(parents=True)
+            (task_dir / "TASK_INSTRUCTIONS.txt").write_text("do it\n", encoding="utf-8")
+            render = tmp / "render"
+            render.mkdir()
+            (render / "AGENTS.md").write_text("context\n", encoding="utf-8")
+            env = {
+                **os.environ,
+                "TASK_IDS": "demo/task1",
+                "LABEL": "cut",
+                "HARNESS_RENDER_DIR": str(render),
+                "TASKS_BASE_DIR": str(store),
+                "HERMES_BIN": str(fake),
+                "HERMES_MODEL": "hermes/default",
+                "TIMEOUT_PER_TASK": "60",
+                "MAX_RETRIES": "1",
+            }
+            proc = subprocess.run(
+                [sys.executable, str(jobbench.HM_RUNNER)],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            out = store / "demo" / "task1" / "model_output" / "cut"
+            self.assertFalse(
+                out.is_dir() and any(out.iterdir()),
+                f"a truncated rollout was adopted as a deliverable: {out}",
+            )
+            log = next((store / ".harness2-logs").glob("*.log"))
+            self.assertIn("a truncated run is not evidence", log.read_text(encoding="utf-8"))
+
+
 class PreflightTests(unittest.TestCase):
     def test_hermes_cli_answers_version(self):
         try:

@@ -197,6 +197,13 @@ def run_one(cfg: Settings, task_id: str) -> bool:
     True only when deliverables landed in `model_output/<label>/`. A rollout that dies on
     auth or a proxy still writes a trajectory, so the caller must not read one as evidence
     that the agent ran: `main` turns a False here into a non-zero exit.
+
+    A rollout CUT by the wall clock is not evidence either, and is not the same thing as a
+    model that spent its own budget: the timeout is a property of this machine, not of the
+    harness being measured. So a timed-out attempt is discarded whole -- even when it left
+    usable-looking files -- and the task is retried; if every attempt times out the task is
+    reported as failed and left unmarked, so a truncated run can never become the evidence a
+    proposer reasons from.
     """
     task_parent = cfg.tasks_base / task_id
     task_dir = task_parent / "task_folder"
@@ -217,20 +224,25 @@ def run_one(cfg: Settings, task_id: str) -> bool:
     output_dir = workspace / "output"
     _stage(task_dir, cfg.render_dir, workspace)
 
+    delivered = False
     for attempt in range(1, cfg.max_retries + 1):
         if attempt > 1:
             _reset_task(task_dir, workspace)
         traj_file = traj_dir / f"{task_name}_{cfg.label}_attempt{attempt}_{_stamp()}.jsonl"
         _log(log_file, f"[{_hms()}] run {task_id} ({cfg.label}) attempt {attempt} -> {traj_file}")
         code = _attempt(cfg, workspace, traj_file, log_file, task_name, attempt)
-        if _nonempty(output_dir):
-            break
         if code == 124:
-            _log(log_file, f"[{_hms()}] TIMEOUT {task_id} attempt {attempt}")
-        else:
-            _log(log_file, f"[{_hms()}] rc={code} {task_id} attempt {attempt}")
+            _log(
+                log_file,
+                f"[{_hms()}] TIMEOUT {task_id} attempt {attempt}: cut at "
+                f"{cfg.timeout_per_task}s -- discarded, a truncated run is not evidence",
+            )
+            continue
+        if _nonempty(output_dir):
+            delivered = True
+            break
+        _log(log_file, f"[{_hms()}] rc={code} {task_id} attempt {attempt} produced no output")
 
-    delivered = _nonempty(output_dir)
     if delivered:
         final_output_dir.mkdir(parents=True, exist_ok=True)
         for item in sorted(output_dir.iterdir()):

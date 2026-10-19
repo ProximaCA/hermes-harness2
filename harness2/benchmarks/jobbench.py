@@ -515,7 +515,7 @@ def render_hermes_tree(staged: Path, render_dir: Path, ctx: dict) -> None:
 
 _INSTALL_MODE = {"oc": "workspace_agents_md", "cx": "codex_root", "hm": "workspace_agents_md"}
 
-_DEFAULT_TIMEOUT = {"oc": 2400, "cx": 3600, "hm": 2400}
+_DEFAULT_TIMEOUT = {"oc": 2400, "cx": 3600, "hm": 5400}
 
 
 def _channels(substrate: str) -> dict:

@@ -28,6 +28,7 @@ from pathlib import Path
 
 from harness2 import config
 from harness2.benchmarks import jobbench
+from harness2.core import prompts
 from harness2.core import tree as HT
 from harness2.substrate.hermes import (
     HERMES_SURFACE,
@@ -196,6 +197,24 @@ class RenderTests(unittest.TestCase):
         out = self._render([{"type": "text", "text": "x" * 500}], max_chars=100)
         self.assertIn("render truncation", out)
         self.assertLess(len(out), 200)
+
+
+class PromptSurfaceTests(unittest.TestCase):
+    """The proposer prompts are resolved per substrate: a missing surface kills a whole sweep."""
+
+    def test_every_prompt_builder_resolves_for_hermes(self):
+        bp = jobbench.jobbench_prompts()
+        for dim in ("INV", "DOM"):
+            self.assertGreater(len(prompts.propose(bp, dim, HERMES_SURFACE)), 1000)
+        self.assertGreater(len(prompts.aggregate(bp, HERMES_SURFACE, k=1)), 1000)
+        self.assertGreater(len(prompts.compose_round(bp, HERMES_SURFACE, t=1, k=1)), 1000)
+        self.assertGreater(len(prompts.select(bp, 2)), 500)
+
+    def test_surface_text_never_advertises_components_hermes_cannot_load(self):
+        st = prompts._st(HERMES_SURFACE)
+        self.assertIn("NO SKILLS", st.tts_surface)
+        self.assertNotIn("skills/<name>/SKILL.md", st.surface_md)
+        self.assertNotIn("plugin/<name>.ts", st.surface_md)
 
 
 class PreflightTests(unittest.TestCase):

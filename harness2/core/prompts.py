@@ -344,6 +344,74 @@ def _lens(bp: BenchPrompts) -> str:
     return f"# DOMAIN AND TASK LENS\n\n{body}" if body else ""
 
 
+_SURFACE_HERMES = """\
+# WHAT YOU CAN CHANGE
+
+The harness is a tree of components. On this substrate only two shapes exist, and both are
+cheap to get wrong:
+
+| path | what it is | when it is in context |
+|---|---|---|
+| `systemprompt.md` | role and procedure | ALWAYS ON -- composed into `AGENTS.md` |
+| `guardrails.md` | standing rules | ALWAYS ON -- same cost |
+| `LongTermMEMORY.md` | durable domain facts | ALWAYS ON -- same cost |
+| `tool_descriptions/tool_guidance.md` | how to use the tools | ALWAYS ON -- same cost |
+| `scripts/<name>.py` | a deterministic helper | run on demand via the shell |
+
+The four always-on files are concatenated, in that order, into ONE `AGENTS.md` in the task
+workspace, which the runtime injects whole into every turn. That single file is the only channel
+into the prompt here.
+
+NO SKILLS, NO SUBAGENTS, NO PLUGINS. There is no per-workspace skill directory, no agent file
+and no tool-loop hook: the runtime resolves skills and plugins from its own home directory, and
+delegation is its own tool. A proposal that writes `skills/`, `sub_agents/` or `plugin/` is
+REFUSED at install time and the whole candidate is discarded -- so knowledge that would have
+been a skill goes into `LongTermMEMORY.md`, and repeated mechanics go into a `scripts/` helper.
+
+ALWAYS-ON PROSE IS THE EXPENSIVE OPTION. Every word of it is in context on every run, competing
+with the agent's own output budget -- and the most costly failure on this work is a run that
+reasons until the budget is gone and produces nothing. Adding prose makes that MORE likely, not
+less.
+
+So prefer, in this order:
+  - a SCRIPT for a deterministic operation the runs hand-rolled and got wrong, or did slowly.
+  - ALWAYS-ON TEXT last, and only for a short rule that genuinely applies to every run. If you
+    add always-on text, cut something else to pay for it -- the four files share one budget.
+
+THE RULE THAT DISCARDS THE WHOLE PROPOSAL. Validation runs before any rollout, and a harness
+that fails it is thrown away entire.
+
+1. EVERY SCRIPT YOU NAME MUST EXIST. A `scripts/<file>.py` invoked from always-on text must
+   ship in the same proposal. A filename that does not compile, or that is not shipped, discards
+   the candidate.
+
+THE DELIVERABLE'S SHAPE BELONGS TO THE REQUEST, NOT TO YOU. A harness changes HOW the agent
+works; it must never change WHAT SHAPE it delivers. Where the task names fields, columns, sheets,
+sections or an order, that shape is part of what was asked for. A component that tells the agent
+to add explanatory columns, restate a derivation inside the artifact, rename a header for
+clarity, or surface intermediate values so a reviewer can check them is CHANGING THE DELIVERABLE
+-- and a downstream reader or importer keys on exact names and positions. Guidance that makes the
+agent's reasoning visible belongs in the harness text or the trajectory, never in the artifact.
+A value the task asks for must be delivered AS A VALUE: a formula, a placeholder or a
+described-but-unperformed calculation leaves the reader to finish the work.
+
+# HOW TO MAKE A CHANGE
+
+The harness is in `context/harness/`, and it is YOURS TO EDIT. Open the files, change them in
+place with your normal tools, and create new ones where a new component is the right lever.
+Your edits on disk ARE the proposal -- there is no separate format to reproduce them in, and
+nothing you write in this reply changes the harness.
+
+- Files you do not touch are inherited unchanged. Do not rewrite a file to keep it the same.
+- Delete a file to remove that component.
+- If the evidence does not argue for any change, leave everything as it is and say KEEP_BASE
+  in your notes. That is a real answer, not a failure: adaptation the evidence does not support
+  costs context and buys nothing.
+
+Then reply with ONE `<notes>` block and nothing else: for each change, the moment in a
+trajectory that motivated it. The notes are read by a person, not applied by a machine."""
+
+
 _INV_TEMPLATE = """\
 # YOUR DIMENSION: INV -- how the agent WORKS
 
@@ -513,6 +581,40 @@ Hard rules, each one learned from a previous failure:
   surface."""
 
 
+_TTS_SURFACE_HEAD_HERMES = """\
+# EDITABLE HARNESS SURFACE
+
+You may write ONLY these paths. Anything else is off the editable surface: it is dropped before
+your work is used, however good it is.
+
+| path | component | when it is in context |
+|---|---|---|
+| `systemprompt.md` | c1 persona/procedure | ALWAYS ON -- composed into `AGENTS.md` |
+| `guardrails.md` | c6 always-on rules | ALWAYS ON -- same cost |
+| `LongTermMEMORY.md` | c3 durable domain facts | ALWAYS ON -- same cost |
+| `tool_descriptions/tool_guidance.md` | c4 tool prose | ALWAYS ON -- same cost |
+| `scripts/<name>.py` | c7 deterministic helper | run ON DEMAND via the shell as `python scripts/<name>.py` |
+
+The four always-on files are concatenated, in that order, into ONE `AGENTS.md` in the task
+workspace, which the runtime injects whole into every turn. That single file is the only channel
+into the prompt on this substrate.
+
+NO SKILLS, NO SUBAGENTS, NO PLUGINS. There is no per-workspace skill directory, no agent file
+and no tool-loop hook here: the runtime resolves skills and plugins from its own home directory,
+and delegation is its own tool. A proposal that writes `skills/`, `sub_agents/` or `plugin/` is
+REFUSED at install time and the whole candidate is discarded -- so knowledge that would have
+been a skill goes into `LongTermMEMORY.md`, and repeated mechanics go into a `scripts/` helper.
+
+Hard rules, each one learned from a previous failure:
+- The single most common failure of this harness family is producing NO deliverable because the
+  model exhausted its output budget on reasoning. Always-on prose makes that WORSE. If you add
+  always-on text, cut something else -- the four files share one budget.
+- `scripts/*.py` filenames must be snake_case and must compile under py_compile, and a script you
+  name in always-on text must ship in the same proposal.
+- Never write `AGENTS.md` or `harness.yaml`: the runtime produces those, and they are not on the
+  editable surface."""
+
+
 _TTS_INV = """\
 # YOUR DIMENSION: INVARIANT -- how the agent works, independent of the subject
 
@@ -629,6 +731,13 @@ def _build_surface_texts() -> dict[str, _SurfaceText]:
             _surface_part(_SURFACE_CODEX, "# HOW TO MAKE A CHANGE"),
         ]
     )
+    hm_tts = "\n\n".join(
+        [
+            _TTS_SURFACE_HEAD_HERMES,
+            _surface_part(_SURFACE_HERMES, "THE RULE THAT DISCARDS", "THE DELIVERABLE'S SHAPE"),
+            _surface_part(_SURFACE_HERMES, "# HOW TO MAKE A CHANGE"),
+        ]
+    )
     return {
         "opencode": _SurfaceText(
             surface_md=_SURFACE_OPENCODE,
@@ -657,6 +766,21 @@ def _build_surface_texts() -> dict[str, _SurfaceText]:
                 "that trigger line in the same edit.",
             ),
             tts_surface=cx_tts,
+        ),
+        "hermes": _SurfaceText(
+            surface_md=_SURFACE_HERMES,
+            inv=_INV_TEMPLATE.replace(
+                "__LOOP_LEVER__",
+                "hook -- there is none on this substrate: it has no tool-loop lever, so an "
+                "invariant that prose cannot carry has no home here and should not be proposed",
+            ),
+            dom=_DOM_TEMPLATE.replace(
+                "__TRIGGER_SENTENCE__",
+                "THIS SUBSTRATE HAS NO SKILLS: a skill directory is refused at install, so the "
+                "default above does not apply here. Write that knowledge as short universal "
+                "facts in `LongTermMEMORY.md` instead.",
+            ),
+            tts_surface=hm_tts,
         ),
     }
 
